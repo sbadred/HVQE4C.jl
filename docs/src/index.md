@@ -1,10 +1,10 @@
-# This is HVQE4C Documentation
+# This is MyProject Documentation
 
 Welcome to the documentation page. 
 
 !!! note "Quick-Glimpse Tutorial"
-    This is a prototype  Julia code to verify the Hybrid approach of partitionning and compression of the Hamiltonian 
+    This is a prototype code to verify the Hybrid approach including the partitionning and the compression of the Hamiltonian.
 
 ```@docs
-HVQE4C project
+HVQE4C
 ```

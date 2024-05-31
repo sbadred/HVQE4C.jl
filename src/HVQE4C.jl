@@ -1,6 +1,9 @@
+"Hybrid approach for the compression of the Hamiltonian "
 module HVQE4C
 
-greet() = print("Hello World!")
+include("../src/FCIDUMP.jl")
 
-export greet
+
+#FCIDUMP
+export  Generate_FCIDUMP, read_electron_integral_tensors
 end # module HVQE4C
