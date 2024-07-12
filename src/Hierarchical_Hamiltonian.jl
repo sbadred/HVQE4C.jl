@@ -2,13 +2,28 @@ using HMatrices
 using StaticArrays
 using SparseArrays
 using ITensors
+
+
+"""
+
+Define a function to handle interaction computation based on the compression flag
+
+"""
+function compute_interactions(leaves,iter, h, v; use_compression::Bool=false, tol::Float64=1e-12, δ_compress::Float64=1e-12)
+  if use_compression
+      return compute_interactions_compression(leaves[iter], leaves[iter+1], h, v, atol=tol,δ_compress=δ_compress)
+  else
+      return compute_interactions_without_compression(leaves[iter], leaves[iter+1], h, v, atol=tol)
+  end
+end
+
 """
       partition_H(level,Op::SecondQuantizationOperators,n;tol::Float64=1e-12)
 
 Build a compressed hierarchical Hamiltonian based a certain level k
 
 """
-function partition_H(level, number_leaves, n, h, v; tol::Float64=1e-12)
+function partition_H(level, number_leaves, n, h, v; use_compression::Bool=false, tol::Float64=1e-12, δ_compress::Float64=1e-12)
   @assert n / (2^level) <= number_leaves
   H = ITensors.OpSum()
   tree = generate_binary_tree(number_leaves, n)
@@ -19,15 +34,15 @@ function partition_H(level, number_leaves, n, h, v; tol::Float64=1e-12)
 
   leaves = Vector{SVector{1,Int64}}[]
   collect_leaves_at_level!(tree, 1, 2, leaves)
-  H = compute_interactions_without_compression(leaves[1], leaves[2], h, v, atol=tol)
+  # Initialize H based on the flag
+  H =compute_interactions(leaves,1, h, v, use_compression=use_compression, tol=tol, δ_compress=δ_compress)
 
-  for leaf = 2:(level-1) #2^(level-1)
+  for leaf = 2:(level-1)
     leaves = Vector{SVector{1,Int64}}[]
     collect_leaves_at_level!(tree, 1, leaf + 1, leaves)
-    H += compute_interactions_without_compression(leaves[1], leaves[2], h, v, atol=tol)
+    H += compute_interactions(leaves,1, h, v, use_compression=use_compression, tol=tol, δ_compress=δ_compress)
     for iter = 3:2:length(leaves)
-      @show iter
-      H += compute_interactions_without_compression(leaves[iter], leaves[iter+1], h, v, atol=tol)
+      H +=compute_interactions(leaves,iter, h, v, use_compression=use_compression, tol=tol, δ_compress=δ_compress)
     end
   end
   H += H_1
@@ -95,7 +110,6 @@ function _molecular_orbital_hamiltonian(intervals,h, v; atol::Float64=1e-14)
         for id1 in intervals[id_] 
           for id2 in intervals[id_]
             i=id1[1]; j=id2[1]
-            @show i,j
 
             if norm(h[i, j]) > atol
               ITensors.add!(hamiltonian, h[i, j], "c†↑", i, "c↑", j)
@@ -214,7 +228,6 @@ function evaluate_R(id_left, intervals_right, h, v, s; atol::Float64=1e-14)
     if norm(h[i, j]) > atol
       op = s == 1 ? "↑" : "↓"
       ITensors.add!(R, h[i, j] / 4, "c$op", j)
-      @show i,j,s
     end
 
     for k_ in eachindex(intervals_right), l_ in eachindex(intervals_right)
@@ -288,3 +301,123 @@ end
 
 
 
+"""
+Compress Hamiltonian through the compression of integrals
+"""
+function compute_interactions_with_compression(intervals_left, intervals_right, h, v; atol::Float64=1e-14,  δ_compress::Float64:1e-12)
+  v *= 0.5
+  hamiltonian_1 = ITensors.OpSum()
+  L, R = intervals_left[end][1], intervals_right[end][1]
+  reshape_and_evaluate(hamiltonian_1,h, v, intervals_left, intervals_right, L, R,δ_compress=δ_compress)
+  reshape_and_evaluate(hamiltonian_1,h, v, intervals_right, intervals_left, R, L,δ_compress=δ_compress)
+
+  return hamiltonian_1
+end
+
+
+
+function evaluate_R_compressed(hamiltonian_1,intervals_left, intervals_right,u_1,v_1, u_2, v_2; atol::Float64=1e-14)
+  low_rank2=size(u_2,3)
+  for α=1:α_range
+    Op1,Op1_T,Op2,Op2_T = ITensors.OpSum()
+    for s in 1:2
+        op = s == 1 ? "↑" : "↓"
+        add_ops_1e!(Op1_T, Op1, Op2, Op2_T, u_1, v_1, α, intervals_left, intervals_right, op)
+        hamiltonian_1 += Ops.expand(Op1_T * Op2) + Ops.expand(Op2_T * Op1)
+    end
+  end
+  low_rank2=size(u_2,3)
+  for α=1:low_rank2
+    Op1,Op1_T=add_ops_2e!(u_2, α, intervals_left, intervals_right, op)
+    Op2,Op2_T=add_ops_2e!(v_2, α, intervals_left, intervals_right, op)
+    hamiltonian_1+=2* Ops.expand(Op1 * Op2) + Ops.expand(Op1_T * Op2_T)
+  end
+end
+
+"""
+Compress integrals according to a given threshold
+"""
+function compress_integrals(ints,list; δ_compress::Float64=1e-12)
+  dim=length(list)
+  N=size(ints)[1]
+  if dim==2
+    M=ints[1:list[1][end][1],1:list[2][end][1]]
+  else
+    M=ints[1:list[1][end][1],1:list[2][end][1],1:list[3][end][1],1:list[4][end][1]]
+    dim_tensor=size(M)
+    M=reshape(M,prod(dim_tensor[1:2]),:)
+  end
+  u,s,v = LinearAlgebra.svd(M)
+  #truncated_rank
+  s_trunc = sv_trunc(s,δ_compress)
+  tail = diagm(s_trunc) * v[:, 1:length(s_trunc)]'
+  return u[:,1:length(s_trunc)], tail
+end
+
+
+function sv_trunc(s::Array{Float64}, tol; degenerate=true, degenerate_eps=1e-14)
+  if tol == 0.0
+      return s
+  else
+      d = length(s)
+      i = 0
+      weight = 0.0
+      norm2 = dot(s, s)
+      while (i < d) && weight < tol^2#*norm2
+          weight += s[d-i]^2
+          i += 1
+      end
+
+      if degenerate && (d - i + 1) != d
+          k = i - 1
+          while k > 0
+              if abs(s[d-k+1] - s[d-i+1]) / abs(s[d-k+1]) > degenerate_eps
+                  break
+              else
+                  i -= 1
+                  k -= 1
+              end
+          end
+      end
+      return s[1:(d-i+1)]
+  end
+end
+
+
+function add_ops_1e!(Si_T, Si, Sj_T, Sj, u, v, α, intervals_left, intervals_right, op)
+  for id_left in eachindex(intervals_left)
+      i = intervals_left[id_left][1]
+      ITensors.add!(Si_T, 0.5 * u[i, α], "c†$op", i)
+      ITensors.add!(Si, 0.5 * u[i, α], "c$op", i)
+  end
+  for id_right in eachindex(intervals_right)
+      j = intervals_right[id_right][1]
+      ITensors.add!(Sj_T, v[α, j], "c†$op", j)
+      ITensors.add!(Sj, v[α, j], "c$op", j)
+  end
+end
+
+
+function add_ops_2e!(v, α, intervals_left, intervals_right, op)
+  Operator=ITensors.OpSum()
+  Operator_T=ITensors.OpSum()
+  for id_left in eachindex(intervals_left)
+    for id_right in eachindex(intervals_right)
+      i = intervals_left[id_left][1]
+      j = intervals_right[id_right][1]
+      for s in 1:2
+        op = s == 1 ? "↑" : "↓"
+        ITensors.add!(Operator, 0.5 * v[i,j, α], "c†$op", i,"c$op", j)
+        ITensors.add!(Operator_T, 0.5 * v[i,j, α], "c†$op", i,"c$op", j)
+      end
+    end
+  end
+  return Operator,Operator_T
+end
+
+function reshape_and_evaluate(hamiltonian, h, v, intervals1, intervals2, L, R;atol::Float64=1e-14,δ_compress::Float64=1e-14)
+  u_1, v_1 = compress_integrals(h, [intervals1, intervals2], δ_compress=δ_compress)
+  u_2, v_2 = compress_integrals(v, [intervals1, intervals2, intervals2, intervals2], δ_compress=δ_compress)
+  u_2 = reshape(u_2, L, R, :); v_2 = reshape(v_2, :, R, R)
+  evaluate_R_compressed(hamiltonian, intervals1, intervals2, u_1,v_1,u_2, v_2; atol=atol)
+end

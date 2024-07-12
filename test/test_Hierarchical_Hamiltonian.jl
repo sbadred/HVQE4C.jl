@@ -40,7 +40,7 @@ end
     MOLECULE = "h4"
     δ = 1e-12
     number_leaves= 1
-    level=3
+    level=2
 
     data = "data/fcidump_files/FCIDUMP." * MOLECULE
     Vnn, sites,N, h, v = read_electron_integral_tensors(data)
@@ -49,7 +49,7 @@ end
     @assert n/(2^level) <= number_leaves
 
   
-    H=partition_H(level,number_leaves,n,h,v,tol=δ)
+    H=partition_H(level,number_leaves,n,h,v,use_compression=false,tol=δ)
     sitetype = "Fermion"
     sites= ITensors.siteinds(sitetype, K)
     HMPO=ITensors.MPO(H, sites,cutoff=0.0)
@@ -206,5 +206,40 @@ end
     H_partition = reshape(permutedims(ITensors.array(H_partition), new_indices), (2^K, 2^K))
     @assert norm(H_partition-MPO_test) <= 1e-13
 
+
+end
+
+
+@testset "test integrals compression" begin 
+    MOLECULE = "h4"
+    δ = 1e-12
+    data = "data/fcidump_files/FCIDUMP." * MOLECULE
+    Vnn, sites,N, h, v = read_electron_integral_tensors(data)
+    number_leaves= 1
+    level=2
+    n=sites
+    @assert n / (2^level) <= number_leaves
+
+    tree = generate_binary_tree(number_leaves, n)
+    leaves = Vector{SVector{1,Int64}}[]
+    collect_leaves_at_level!(tree, 1, level, leaves)
+    L=leaves[1]
+    R=leaves[2]
+    
+    tols=[1e-2, 1e-3,1e-4,1e-6,1e-8,1e-10,1e-12,1e-14]
+    for tol in tols
+       #1electron integrals
+       list=[L,R]
+       U_1,V_1=compress_integrals(h,list,δ_compress=tol)
+       println("Frobenuis Norm 1: ", norm(h[1:list[1][end][1],1:list[2][end][1]]-U_1*V_1))
+
+       list=[L,R,R,R]
+       U_2,V_2=compress_integrals(v,[L,R,R,R],δ_compress=tol)
+       M=v[1:list[1][end][1],1:list[2][end][1],1:list[3][end][1],1:list[4][end][1]]
+       dim_tensor=size(M)
+       M=reshape(M,prod(dim_tensor[1:2]),:)
+       println("Frobenuis Norm 2: ", norm(M-U_2*V_2))
+
+    end
 
 end
