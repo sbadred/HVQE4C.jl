@@ -67,6 +67,36 @@ end
 end
 
 
+@testset "Test the partition of compression H at level k" begin 
+    MOLECULE = "h4"
+    δ = 1e-12
+    number_leaves= 1
+    level=2
+
+    data = "data/fcidump_files/FCIDUMP." * MOLECULE
+    Vnn, sites,N, h, v = read_electron_integral_tensors(data)
+    n=sites
+    K=2*n
+    @assert n/(2^level) <= number_leaves
+
+  
+    H=partition_H(level,number_leaves,n,h,v,use_compression=true,tol=δ)
+    sitetype = "Fermion"
+    sites= ITensors.siteinds(sitetype, K)
+    HMPO=ITensors.MPO(H, sites,cutoff=0.0)
+
+    H_partition=ITensors.contract(HMPO).tensor
+    new_indices = vcat(2*K-1:-2:1, 2*K:-2:2)
+
+    H_partition=reshape(permutedims(ITensors.array(H_partition),new_indices),(2^K, 2^K))
+    
+    #evaluate H_exact
+    H_exact= molecular_hamiltonian_matrix(h, v)
+
+    @assert norm(H_partition-H_exact) <= 1e-12
+
+end
+
 
 @testset "test first block of interaction" begin 
     δ = 1e-12
@@ -132,6 +162,8 @@ end
         end
     end
 
+
+
     for (left, right) in Set([(L, R), (R, L)])#, (L, L), (R, R)])
         for id1 in left
             for id2 in right
@@ -151,7 +183,7 @@ end
 
 
     v_ = 0.5 * v
-    for (idx1, idx2, idx3, idx4) in Set([(L, L, L, R), (L, L, R, L), (L, R, L, L), (R, L, L, L), (R, R, R, L), (R, R, L, R), (R, L, R, R), (L, R, R, R)])#, (L, L, L, L), (R, R, R, R)])
+    for (idx1, idx2, idx3, idx4) in Set([(L, L, L, R), (L, L, R, L), (L, R, L, L), (R, L, L, L),(R, R, R, L), (R, R, L, R), (R, L, R, R), (L, R, R, R)])#])#)#])#, (L, L, L, L), (R, R, R, R)])
         for id1 in idx1, id2 in idx2, id3 in idx3, id4 in idx4
             i = id1[1]
             j = id2[1]
@@ -210,7 +242,7 @@ end
 end
 
 
-@testset "test integrals compression" begin 
+@testset "test integrals compression with only screening" begin 
     MOLECULE = "h4"
     δ = 1e-12
     data = "data/fcidump_files/FCIDUMP." * MOLECULE
@@ -241,5 +273,55 @@ end
        println("Frobenuis Norm 2: ", norm(M-U_2*V_2))
 
     end
+
+end
+
+
+
+
+
+
+
+
+
+
+
+
+@testset "Test the partition of compression H at level k with compression of intergrals" begin 
+    MOLECULE = "h4"
+    δ = 1e-12
+    δ_compress=1e-1
+    number_leaves= 1
+    level=2
+
+    data = "data/fcidump_files/FCIDUMP." * MOLECULE
+    Vnn, sites,N, h, v = read_electron_integral_tensors(data)
+    n=sites
+    K=2*n
+    @assert n/(2^level) <= number_leaves
+
+  
+    #without compression
+    H=partition_H(level,number_leaves,n,h,v,use_compression=false,tol=δ)
+    sitetype = "Fermion"
+    sites= ITensors.siteinds(sitetype, K)
+    HMPO=ITensors.MPO(H, sites,cutoff=0.0)
+
+    H_partition=ITensors.contract(HMPO).tensor
+    new_indices = vcat(2*K-1:-2:1, 2*K:-2:2)
+
+    H_partition=reshape(permutedims(ITensors.array(H_partition),new_indices),(2^K, 2^K))
+    
+    #with compression
+    H_compressed = partition_H(level, number_leaves, n, h, v, use_compression=true, tol=δ,δ_compress=δ_compress);
+    sitetype = "Fermion"
+    sites = ITensors.siteinds(sitetype, K)
+    HMPO = ITensors.MPO(H_compressed, sites, cutoff=0.0)
+
+    H_compressed_partition = ITensors.contract(HMPO).tensor
+    new_indices = vcat(2*K-1:-2:1, 2*K:-2:2)
+
+    H_compressed_partition = reshape(permutedims(ITensors.array(H_compressed_partition), new_indices), (2^K, 2^K))
+    @assert norm(H_partition-H_compressed_partition) <= 1e-12
 
 end

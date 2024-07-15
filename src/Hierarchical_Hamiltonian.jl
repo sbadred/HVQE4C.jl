@@ -196,7 +196,7 @@ function compute_interactions_without_compression(intervals_left, intervals_righ
       end
     end
   end
-  hamiltonian_1 += hamiltonian_2
+  #hamiltonian_1 += hamiltonian_2
 
 
 
@@ -233,6 +233,7 @@ function evaluate_R(id_left, intervals_right, h, v, s; atol::Float64=1e-14)
     for k_ in eachindex(intervals_right), l_ in eachindex(intervals_right)
       k, l = intervals_right[k_][1], intervals_right[l_][1]
       if norm(v[i, j, k, l]) > atol
+        op = s == 1 ? "↑" : "↓"
         ITensors.add!(R, v[i, j, k, l], "c†↑", k, "c↑", l, "c$op", j)
         ITensors.add!(R, v[i, j, k, l], "c†↓", k, "c↓", l, "c$op", j)
       end
@@ -249,6 +250,7 @@ function evaluate_R(id_left, intervals_right, h, v, s; atol::Float64=1e-14)
     for k_ in eachindex(intervals_right), l_ in eachindex(intervals_right)
       k, l = intervals_right[k_][1], intervals_right[l_][1]
       if norm(v[i, j, k, l]) > atol
+        op = s == 1 ? "↑" : "↓"
         ITensors.add!(RT, v[j, i, l, k], "c†$op", j, "c†↑", l, "c↑", k)
         ITensors.add!(RT, v[j, i, l, k], "c†$op", j, "c†↓", l, "c↓", k)
       end
@@ -304,36 +306,114 @@ end
 """
 Compress Hamiltonian through the compression of integrals
 """
-function compute_interactions_with_compression(intervals_left, intervals_right, h, v; atol::Float64=1e-14,  δ_compress::Float64:1e-12)
-  v *= 0.5
-  hamiltonian_1 = ITensors.OpSum()
-  L, R = intervals_left[end][1], intervals_right[end][1]
-  reshape_and_evaluate(hamiltonian_1,h, v, intervals_left, intervals_right, L, R,δ_compress=δ_compress)
-  reshape_and_evaluate(hamiltonian_1,h, v, intervals_right, intervals_left, R, L,δ_compress=δ_compress)
+function compute_interactions_compression(intervals_left, intervals_right, h, v; atol::Float64=1e-14,  δ_compress::Float64=1e-12)
+  v_=v*0.5  
+  hamiltonian = ITensors.OpSum()
+ 
+  hamiltonian=reshape_and_evaluate(h, v_, intervals_left, intervals_right,atol=atol,δ_compress=δ_compress);
 
-  return hamiltonian_1
+  hamiltonian+=reshape_and_evaluate(h, v_, intervals_right, intervals_left,atol=atol,δ_compress=δ_compress);
+  hamiltonian+=evaluate_B_compressed(intervals_left, intervals_right,v_; atol=atol)
+
+  return hamiltonian
 end
 
 
 
-function evaluate_R_compressed(hamiltonian_1,intervals_left, intervals_right,u_1,v_1, u_2, v_2; atol::Float64=1e-14)
-  low_rank2=size(u_2,3)
-  for α=1:α_range
-    Op1,Op1_T,Op2,Op2_T = ITensors.OpSum()
+function evaluate_R_compressed(intervals_left, intervals_right,u_1,v_1, u_2, v_2; atol::Float64=1e-14)
+  hamiltonian=ITensors.OpSum()
+  low_rank=size(u_1,2)
+  for α=1:low_rank
     for s in 1:2
+        Op1= ITensors.OpSum(); Op1_T= ITensors.OpSum();Op2= ITensors.OpSum();Op2_T = ITensors.OpSum()
         op = s == 1 ? "↑" : "↓"
-        add_ops_1e!(Op1_T, Op1, Op2, Op2_T, u_1, v_1, α, intervals_left, intervals_right, op)
-        hamiltonian_1 += Ops.expand(Op1_T * Op2) + Ops.expand(Op2_T * Op1)
+        add_ops_1e!(Op1_T, Op1, Op2_T, Op2, u_1, v_1, α, intervals_left, intervals_right, op)
+        hamiltonian+= Ops.expand(Op1_T * Op2) + Ops.expand(Op2_T * Op1)
     end
   end
-  low_rank2=size(u_2,3)
-  for α=1:low_rank2
-    Op1,Op1_T=add_ops_2e!(u_2, α, intervals_left, intervals_right, op)
-    Op2,Op2_T=add_ops_2e!(v_2, α, intervals_left, intervals_right, op)
-    hamiltonian_1+=2* Ops.expand(Op1 * Op2) + Ops.expand(Op1_T * Op2_T)
+
+  low_rank=size(u_2,3)
+  for α = 1:low_rank
+      Op1, Op1_T = add_ops_2e!(u_2, α, intervals_left, intervals_right)
+      Op2, Op2_T = add_ops_2e!(permutedims(v_2, [2, 3, 1]), α, intervals_right, intervals_right)
+      hamiltonian +=  2*(Ops.expand(Op2*Op1) +  Ops.expand(Op1_T*Op2_T ))
+
   end
+  return hamiltonian
 end
 
+function evaluate_B_compressed(intervals_left, intervals_right,v; atol::Float64=1e-14)
+  hamiltonian=ITensors.OpSum()
+  u_2, v_2 = compress_integrals(v, [intervals_left, intervals_left, intervals_right, intervals_right], δ_compress=δ_compress)
+
+  L_left_start,L_left_end = intervals_left[1][1],intervals_left[end][1]
+  L_right_start, L_right_end=intervals_right[1][1], intervals_right[end][1]
+  
+  u_2 = reshape(u_2, L_left_end-L_left_start+1, L_left_end-L_left_start+1, :); 
+  v_2 = reshape(v_2, :, L_right_end-L_right_start+1, L_right_end-L_right_start+1)
+ 
+  low_rank=size(u_2,3)
+  for α = 1:low_rank
+      Op1, ~ = add_ops_2e!(u_2, α, intervals_left, intervals_left)
+      Op2, ~ = add_ops_2e!(permutedims(v_2, [2, 3, 1]), α, intervals_right, intervals_right)
+      hamiltonian +=  2*Ops.expand(Op1*Op2)
+  end
+
+  u_2, v_2 = compress_integrals(v, [intervals_left, intervals_right, intervals_right, intervals_left], δ_compress=δ_compress)
+
+  u_2 = reshape(u_2, L_left_end-L_left_start+1, L_right_end-L_right_start+1, :); 
+  v_2 = reshape(v_2, :, L_right_end-L_right_start+1, L_left_end-L_left_start+1)
+ 
+  low_rank=size(u_2,3)
+  for α = 1:low_rank
+      Op_1, ~ = add_ops_2e!(u_2, α, intervals_left, intervals_right)
+      Op_2, ~ = add_ops_2e!(permutedims(v_2, [2, 3, 1]), α, intervals_right, intervals_left)
+      hamiltonian +=  -Ops.expand(Op_1*Op_2)
+  end
+
+  u_2, v_2 = compress_integrals(v, [intervals_right,intervals_left, intervals_left,intervals_right], δ_compress=δ_compress)
+
+  u_2 = reshape(u_2, L_right_end-L_right_start+1,L_left_end-L_left_start+1,  :); 
+  v_2 = reshape(v_2, :, L_left_end-L_left_start+1,L_right_end-L_right_start+1)
+ 
+  low_rank=size(u_2,3)
+  for α = 1:low_rank
+      Op1, ~ = add_ops_2e!(u_2, α, intervals_right, intervals_left)
+      Op_2, ~ = add_ops_2e!(permutedims(v_2, [2, 3, 1]), α, intervals_right, intervals_left)
+      hamiltonian +=  Ops.expand(Op1*Op_2)
+
+      Op2, ~ = add_ops_2e!(permutedims(v_2, [2, 3, 1]), α, intervals_left, intervals_right)
+      hamiltonian +=  -Ops.expand(Op1*Op2)
+      
+  end
+
+  Operator=ITensors.OpSum()
+  for id_left in eachindex(intervals_left)
+    for id_right1 in eachindex(intervals_right)
+      for id_right2 in eachindex(intervals_right)
+        j = intervals_left[id_left][1]
+        i = intervals_right[id_right1][1]
+        l = intervals_right[id_right2][1]
+        ITensors.add!(Operator, v[i, j, j, l], "c†↑", i, "c↑", l)
+        ITensors.add!(Operator, v[i, j, j, l], "c†↓", i, "c↓", l)
+      end
+    end
+  end
+
+  for id_right in eachindex(intervals_right)
+    for id_left1 in eachindex(intervals_left)
+      for id_left2 in eachindex(intervals_left)
+        j = intervals_left[id_right][1]
+        i = intervals_right[id_left1][1]
+        k = intervals_right[id_left2][1]
+        ITensors.add!(Operator, v[i, j, k, j], "c†↑", i, "c↑", k)
+        ITensors.add!(Operator, v[i, j, k, j], "c†↓", i, "c↓", k)
+      end
+    end
+  end
+  hamiltonian+=Operator
+  return hamiltonian
+end
 """
 Compress integrals according to a given threshold
 """
@@ -341,9 +421,9 @@ function compress_integrals(ints,list; δ_compress::Float64=1e-12)
   dim=length(list)
   N=size(ints)[1]
   if dim==2
-    M=ints[1:list[1][end][1],1:list[2][end][1]]
+    M=ints[list[1][1][1]:list[1][end][1],list[2][1][1]:list[2][end][1]]
   else
-    M=ints[1:list[1][end][1],1:list[2][end][1],1:list[3][end][1],1:list[4][end][1]]
+    M=ints[list[1][1][1]:list[1][end][1],list[2][1][1]:list[2][end][1],list[3][1][1]:list[3][end][1],list[4][1][1]:list[4][end][1]]
     dim_tensor=size(M)
     M=reshape(M,prod(dim_tensor[1:2]),:)
   end
@@ -385,39 +465,55 @@ end
 
 
 function add_ops_1e!(Si_T, Si, Sj_T, Sj, u, v, α, intervals_left, intervals_right, op)
+  idx1=1
+  idx2=1
   for id_left in eachindex(intervals_left)
       i = intervals_left[id_left][1]
-      ITensors.add!(Si_T, 0.5 * u[i, α], "c†$op", i)
-      ITensors.add!(Si, 0.5 * u[i, α], "c$op", i)
+      ITensors.add!(Si_T, 0.5 * u[idx1, α], "c†$op", i)
+      ITensors.add!(Si, 0.5 * u[idx1, α], "c$op", i)
+      idx1+=1
   end
   for id_right in eachindex(intervals_right)
       j = intervals_right[id_right][1]
-      ITensors.add!(Sj_T, v[α, j], "c†$op", j)
-      ITensors.add!(Sj, v[α, j], "c$op", j)
+      ITensors.add!(Sj_T, v[α, idx2], "c†$op", j)
+      ITensors.add!(Sj, v[α, idx2], "c$op", j)
+      idx2+=1
   end
 end
 
 
-function add_ops_2e!(v, α, intervals_left, intervals_right, op)
+function add_ops_2e!(v, α, intervals_left, intervals_right)
   Operator=ITensors.OpSum()
   Operator_T=ITensors.OpSum()
-  for id_left in eachindex(intervals_left)
-    for id_right in eachindex(intervals_right)
-      i = intervals_left[id_left][1]
-      j = intervals_right[id_right][1]
-      for s in 1:2
-        op = s == 1 ? "↑" : "↓"
-        ITensors.add!(Operator, 0.5 * v[i,j, α], "c†$op", i,"c$op", j)
-        ITensors.add!(Operator_T, 0.5 * v[i,j, α], "c†$op", i,"c$op", j)
+  
+  for s in 1:2
+    idx1=1
+    idx2 = 1
+    op = s == 1 ? "↑" : "↓"
+    for id_left in eachindex(intervals_left)
+      for id_right in eachindex(intervals_right)
+        i = intervals_left[id_left][1]
+        j = intervals_right[id_right][1]
+        ITensors.add!(Operator, v[idx1, idx2, α], "c†$op", i, "c$op", j)
+        ITensors.add!(Operator_T, v[idx1, idx2, α], "c†$op", j, "c$op", i)
+        idx2 += 1
       end
+      idx2 = 1
+      idx1 += 1
     end
   end
   return Operator,Operator_T
 end
 
-function reshape_and_evaluate(hamiltonian, h, v, intervals1, intervals2, L, R;atol::Float64=1e-14,δ_compress::Float64=1e-14)
+function reshape_and_evaluate(h, v, intervals1, intervals2;atol::Float64=1e-14,δ_compress::Float64=1e-14)
   u_1, v_1 = compress_integrals(h, [intervals1, intervals2], δ_compress=δ_compress)
   u_2, v_2 = compress_integrals(v, [intervals1, intervals2, intervals2, intervals2], δ_compress=δ_compress)
-  u_2 = reshape(u_2, L, R, :); v_2 = reshape(v_2, :, R, R)
-  evaluate_R_compressed(hamiltonian, intervals1, intervals2, u_1,v_1,u_2, v_2; atol=atol)
+  @show size(u_2)
+  L_left_start,L_left_end = intervals1[1][1],intervals1[end][1]
+  L_right_start, L_right_end=intervals2[1][1], intervals2[end][1]
+  
+  u_2 = reshape(u_2, L_left_end-L_left_start+1, L_right_end-L_right_start+1, :); 
+  v_2 = reshape(v_2, :, L_right_end-L_right_start+1, L_right_end-L_right_start+1)
+  hamiltonian=evaluate_R_compressed(intervals1, intervals2, u_1,v_1,u_2, v_2; atol=atol)
+  return hamiltonian
 end
