@@ -2,7 +2,7 @@
 
 julia_version = "1.10.2"
 manifest_format = "2.0"
-project_hash = "d02054bf11243188641c3316fcdf65482503cbae"
+project_hash = "5f1f7f494372d10584179c23cbdf020e6af26437"
 
 [[deps.ANSIColoredPrinters]]
 git-tree-sha1 = "574baf8110975760d391c710b6341da1afa48d8c"
@@ -832,6 +832,12 @@ uuid = "4607b0f0-06f3-5cda-b6b1-a6196a1729e9"
 deps = ["Artifacts", "Libdl", "libblastrampoline_jll"]
 uuid = "bea87d4a-7f5b-5778-9afe-8cc45184846c"
 version = "7.2.1+1"
+
+[[deps.SymRCM]]
+deps = ["LinearAlgebra", "SparseArrays", "Test"]
+git-tree-sha1 = "fba6b5d399ff571ab63b4f93b51360050c321b18"
+uuid = "286e6d88-80af-4590-acc9-0001b223b9bd"
+version = "0.2.2"
 
 [[deps.TOML]]
 deps = ["Dates"]

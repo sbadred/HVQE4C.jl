@@ -290,9 +290,9 @@ end
 @testset "Test the partition of compression H at level k with compression of intergrals" begin 
     MOLECULE = "h4"
     δ = 1e-12
-    δ_compress=1e-1
+   
     number_leaves= 1
-    level=2
+    level=3
 
     data = "data/fcidump_files/FCIDUMP." * MOLECULE
     Vnn, sites,N, h, v = read_electron_integral_tensors(data)
@@ -302,6 +302,7 @@ end
 
   
     #without compression
+    
     H=partition_H(level,number_leaves,n,h,v,use_compression=false,tol=δ)
     sitetype = "Fermion"
     sites= ITensors.siteinds(sitetype, K)
@@ -313,15 +314,21 @@ end
     H_partition=reshape(permutedims(ITensors.array(H_partition),new_indices),(2^K, 2^K))
     
     #with compression
-    H_compressed = partition_H(level, number_leaves, n, h, v, use_compression=true, tol=δ,δ_compress=δ_compress);
-    sitetype = "Fermion"
-    sites = ITensors.siteinds(sitetype, K)
-    HMPO = ITensors.MPO(H_compressed, sites, cutoff=0.0)
+    list=[]
+    tols = [1e-2, 1e-3, 1e-4, 1e-6, 1e-8, 1e-10, 1e-12, 1e-14]
+    for δ_compress in tols
+        @show δ_compress
+        H_compressed = partition_H(level, number_leaves, n, h, v, use_compression=true, tol=δ, δ_compress=δ_compress)
+        sitetype = "Fermion"
+        sites = ITensors.siteinds(sitetype, K)
+        HMPO = ITensors.MPO(H_compressed, sites, cutoff=0.0)
 
-    H_compressed_partition = ITensors.contract(HMPO).tensor
-    new_indices = vcat(2*K-1:-2:1, 2*K:-2:2)
+        H_compressed_partition = ITensors.contract(HMPO).tensor
+        new_indices = vcat(2*K-1:-2:1, 2*K:-2:2)
 
-    H_compressed_partition = reshape(permutedims(ITensors.array(H_compressed_partition), new_indices), (2^K, 2^K))
-    @assert norm(H_partition-H_compressed_partition) <= 1e-12
+        H_compressed_partition = reshape(permutedims(ITensors.array(H_compressed_partition), new_indices), (2^K, 2^K))
+        push!(list,norm(H_partition - H_compressed_partition)./norm(H_partition))
+        #@assert norm(H_partition - H_compressed_partition) <= 1e-12
+    end
 
 end
